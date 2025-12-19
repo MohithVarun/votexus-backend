@@ -17,8 +17,8 @@ const addCandidate = async (req, res, next) => {
 
     const { fullName, motto, currentElection } = req.body;
 
-    if (!fullName || !motto) {
-      return next(new HttpError("Fill in all fields", 422));
+    if (!fullName || !motto || !currentElection) {
+      return next(new HttpError("Fill all fields", 422));
     }
 
     if (!req.files || !req.files.image) {
@@ -29,11 +29,20 @@ const addCandidate = async (req, res, next) => {
 
     const allowedTypes = ["image/jpeg", "image/png", "image/jpg", "image/webp"];
     if (!allowedTypes.includes(image.mimetype)) {
-      return next(new HttpError("Only JPG, PNG or WEBP images allowed", 422));
+      return next(
+        new HttpError("Only JPG, PNG or WEBP images allowed", 422)
+      );
     }
 
     if (image.size > 1000000) {
-      return next(new HttpError("Image size must be less than 1MB", 422));
+      return next(
+        new HttpError("Image size must be less than 1MB", 422)
+      );
+    }
+
+    const election = await ElectionModel.findById(currentElection);
+    if (!election || election.isDeleted) {
+      return next(new HttpError("Election not found", 404));
     }
 
     let uploadResult;
@@ -46,15 +55,8 @@ const addCandidate = async (req, res, next) => {
           resource_type: "image",
         }
       );
-    } catch (cloudErr) {
-      return next(
-        new HttpError("Image upload failed. Try again.", 500)
-      );
-    }
-
-    const election = await ElectionModel.findById(currentElection);
-    if (!election) {
-      return next(new HttpError("Election not found", 404));
+    } catch (err) {
+      return next(new HttpError("Image upload failed", 500));
     }
 
     let newCandidate;
@@ -70,29 +72,29 @@ const addCandidate = async (req, res, next) => {
             motto,
             image: uploadResult.secure_url,
             cloudinaryId: uploadResult.public_id,
-            election: currentElection,
+            election: election._id,
           },
         ],
         { session: sess }
       );
 
       newCandidate = newCandidate[0];
-      election.candidates.push(newCandidate);
+      election.candidates.push(newCandidate._id);
       await election.save({ session: sess });
 
       await sess.commitTransaction();
       await sess.endSession();
     } catch (err) {
-      if (err.message.includes("replica set")) {
+      if (err.message && err.message.includes("replica set")) {
         newCandidate = await CandidateModel.create({
           fullName,
           motto,
           image: uploadResult.secure_url,
           cloudinaryId: uploadResult.public_id,
-          election: currentElection,
+          election: election._id,
         });
 
-        election.candidates.push(newCandidate);
+        election.candidates.push(newCandidate._id);
         await election.save();
       } else {
         throw err;
@@ -110,11 +112,14 @@ const addCandidate = async (req, res, next) => {
   }
 };
 
-/* ================= GET CANDIDATE ================= */
+/* ================= GET SINGLE CANDIDATE ================= */
 const getCandidate = async (req, res, next) => {
   try {
     const candidate = await CandidateModel.findById(req.params.id);
-    res.json(candidate);
+    if (!candidate) {
+      return next(new HttpError("Candidate not found", 404));
+    }
+    res.status(200).json(candidate);
   } catch (error) {
     return next(new HttpError(error));
   }
@@ -136,7 +141,7 @@ const removeCandidate = async (req, res, next) => {
       return next(new HttpError("Candidate not found", 404));
     }
 
-    // 🔥 Delete image from Cloudinary
+    // Delete image from Cloudinary
     if (candidate.cloudinaryId) {
       try {
         await cloudinary.uploader.destroy(candidate.cloudinaryId);
@@ -178,7 +183,7 @@ const voteCandidate = async (req, res, next) => {
     }
 
     const election = await ElectionModel.findById(selectedElection);
-    if (!election) {
+    if (!election || election.isDeleted) {
       return next(new HttpError("Election not found", 404));
     }
 

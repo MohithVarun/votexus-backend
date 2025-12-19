@@ -27,13 +27,13 @@ const addElection = async (req, res, next) => {
     const allowedTypes = ["image/jpeg", "image/png", "image/jpg", "image/webp"];
     if (!allowedTypes.includes(club.mimetype)) {
       return next(
-        new HttpError("Only JPG, PNG or WEBP images are allowed", 422)
+        new HttpError("Only JPG, PNG or WEBP images allowed", 422)
       );
     }
 
     if (club.size > 1000000) {
       return next(
-        new HttpError("Image size should be less than 1MB", 422)
+        new HttpError("Image size must be less than 1MB", 422)
       );
     }
 
@@ -69,7 +69,7 @@ const addElection = async (req, res, next) => {
 /* ================= GET ALL ELECTIONS ================= */
 const getElections = async (req, res, next) => {
   try {
-    const elections = await ElectionModel.find();
+    const elections = await ElectionModel.find({ isDeleted: false });
     res.status(200).json(elections);
   } catch (error) {
     return next(new HttpError(error));
@@ -79,10 +79,15 @@ const getElections = async (req, res, next) => {
 /* ================= GET SINGLE ELECTION ================= */
 const getElection = async (req, res, next) => {
   try {
-    const election = await ElectionModel.findById(req.params.id);
+    const election = await ElectionModel.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+    });
+
     if (!election) {
       return next(new HttpError("Election not found", 404));
     }
+
     res.status(200).json(election);
   } catch (error) {
     return next(new HttpError(error));
@@ -107,9 +112,11 @@ const getElectionVoters = async (req, res, next) => {
     const election = await ElectionModel.findById(req.params.id).populate(
       "voters"
     );
-    if (!election) {
+
+    if (!election || election.isDeleted) {
       return next(new HttpError("Election not found", 404));
     }
+
     res.status(200).json(election.voters);
   } catch (error) {
     return next(new HttpError(error));
@@ -130,11 +137,11 @@ const updateElection = async (req, res, next) => {
     }
 
     const election = await ElectionModel.findById(req.params.id);
-    if (!election) {
+    if (!election || election.isDeleted) {
       return next(new HttpError("Election not found", 404));
     }
 
-    let updatedData = { title, description };
+    const updatedData = { title, description };
 
     if (req.files && req.files.club) {
       const club = req.files.club;
@@ -148,7 +155,7 @@ const updateElection = async (req, res, next) => {
 
       if (club.size > 1000000) {
         return next(
-          new HttpError("Image size should be less than 1MB", 422)
+          new HttpError("Image size must be less than 1MB", 422)
         );
       }
 
@@ -182,7 +189,7 @@ const updateElection = async (req, res, next) => {
   }
 };
 
-/* ================= DELETE ELECTION ================= */
+/* ================= DELETE ELECTION (SOFT DELETE) ================= */
 // DELETE : api/elections/:id (Admin only)
 const removeElection = async (req, res, next) => {
   try {
@@ -191,20 +198,29 @@ const removeElection = async (req, res, next) => {
     }
 
     const election = await ElectionModel.findById(req.params.id);
-    if (!election) {
+    if (!election || election.isDeleted) {
       return next(new HttpError("Election not found", 404));
     }
 
-    if (election.cloudinaryId) {
-      try {
-        await cloudinary.uploader.destroy(election.cloudinaryId);
-      } catch (err) {
-        console.error("Cloudinary delete failed:", err);
+    // 🔥 Cascade delete candidate images
+    const candidates = await CandidateModel.find({
+      election: election._id,
+    });
+
+    for (const candidate of candidates) {
+      if (candidate.cloudinaryId) {
+        try {
+          await cloudinary.uploader.destroy(candidate.cloudinaryId);
+        } catch (err) {
+          console.error("Failed to delete candidate image:", err);
+        }
       }
     }
 
     await CandidateModel.deleteMany({ election: election._id });
-    await election.deleteOne();
+
+    election.isDeleted = true;
+    await election.save();
 
     res.status(200).json("Election deleted successfully.");
   } catch (error) {
