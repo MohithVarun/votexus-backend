@@ -37,8 +37,16 @@ const electionSchema = new Schema(
         ref: "Voter",
       },
     ],
+
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
+
+/* ---------- INDEXES (PERFORMANCE) ---------- */
+electionSchema.index({ isDeleted: 1 });
 
 module.exports = model("Election", electionSchema);

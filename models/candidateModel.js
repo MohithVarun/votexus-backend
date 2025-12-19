@@ -38,4 +38,8 @@ const candidateSchema = new Schema(
   { timestamps: true }
 );
 
+/* ---------- INDEXES (PERFORMANCE) ---------- */
+candidateSchema.index({ election: 1 });
+candidateSchema.index({ voteCount: -1 });
+
 module.exports = model("Candidate", candidateSchema);
